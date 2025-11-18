@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -125,7 +125,7 @@ def list_reservations(
 ):
     from bson import ObjectId
     try:
-        oid = ObjectId(itinerary_id)
+        _ = ObjectId(itinerary_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid itinerary_id")
 
@@ -137,12 +137,10 @@ def list_reservations(
     if location:
         filters["location"] = location
 
-    # Base query
     cursor = db["reservation"].find(filters)
 
     results = []
     for doc in cursor:
-        # time filtering
         if start or end:
             st = doc.get("start_time")
             et = doc.get("end_time")
@@ -153,7 +151,6 @@ def list_reservations(
                 ok = False
             if not ok:
                 continue
-        # text filter
         if q:
             text = " ".join(
                 [
@@ -171,7 +168,21 @@ def list_reservations(
     return results
 
 
-# ------------------- Placeholder import endpoints -------------------
+# ------------------- Provider integrations -------------------
+SUPPORTED_PROVIDERS: Dict[str, str] = {
+    "booking.com": "providers.booking",
+    "agoda": "providers.agoda",
+    "viator": "providers.viator",
+    "klook": "providers.klook",
+    "getyourguide": "providers.getyourguide",
+}
+
+
+@app.get("/api/providers")
+def get_supported_providers():
+    return {"providers": list(SUPPORTED_PROVIDERS.keys())}
+
+
 class EmailImportIn(BaseModel):
     itinerary_id: str
     provider_hint: Optional[str] = None
@@ -182,7 +193,6 @@ class EmailImportIn(BaseModel):
 @app.post("/api/import/email")
 def import_from_email(payload: EmailImportIn):
     # Placeholder for future: parse emails to reservations
-    # For now, just acknowledge request
     return {"status": "accepted", "message": "Email import queued", "itinerary_id": payload.itinerary_id}
 
 
@@ -194,8 +204,52 @@ class ProviderImportIn(BaseModel):
 
 @app.post("/api/import/provider")
 def import_from_provider(payload: ProviderImportIn):
-    # Placeholder for future: use provider APIs
-    return {"status": "accepted", "message": f"Provider {payload.provider} sync queued", "itinerary_id": payload.itinerary_id}
+    # Validate itinerary
+    from bson import ObjectId
+    try:
+        _ = db["itinerary"].find_one({"_id": ObjectId(payload.itinerary_id)})
+        if _ is None:
+            raise HTTPException(status_code=404, detail="Itinerary not found")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid itinerary_id")
+
+    provider_key = payload.provider.lower()
+    if provider_key not in SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+
+    # Dynamically import connector
+    module_path = SUPPORTED_PROVIDERS[provider_key]
+    try:
+        import importlib
+        connector = importlib.import_module(module_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Connector load error: {str(e)[:120]}")
+
+    # Fetch reservations from provider (mock connectors return sample data)
+    try:
+        account = {"access_token": payload.access_token}
+        fetched: List[Dict] = connector.fetch_reservations(account)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Provider fetch failed: {str(e)[:120]}")
+
+    # Insert into DB tied to itinerary
+    created = 0
+    items = []
+    for item in fetched:
+        data = {
+            **item,
+            "itinerary_id": payload.itinerary_id,
+        }
+        try:
+            inserted_id = create_document("reservation", data)
+            data["id"] = inserted_id
+            items.append(data)
+            created += 1
+        except Exception as e:
+            # Skip individual failures but continue
+            continue
+
+    return {"status": "ok", "provider": provider_key, "created": created, "items": items}
 
 
 if __name__ == "__main__":
