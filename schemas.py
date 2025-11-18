@@ -1,48 +1,52 @@
 """
-Database Schemas
+Database Schemas for Trip Itinerary Aggregator
 
-Define your MongoDB collection schemas here using Pydantic models.
-These schemas are used for data validation in your application.
-
-Each Pydantic model represents a collection in your database.
-Model name is converted to lowercase for the collection name:
-- User -> "user" collection
-- Product -> "product" collection
-- BlogPost -> "blogs" collection
+Each Pydantic model represents a collection in MongoDB.
+Collection name is the lowercase of the class name.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List, Literal
+from datetime import datetime
 
-# Example schemas (replace with your own):
-
-class User(BaseModel):
+class Itinerary(BaseModel):
     """
-    Users collection schema
-    Collection name: "user" (lowercase of class name)
+    Collection: "itinerary"
+    Represents a user's trip container with a date range and optional locations.
     """
-    name: str = Field(..., description="Full name")
-    email: str = Field(..., description="Email address")
-    address: str = Field(..., description="Address")
-    age: Optional[int] = Field(None, ge=0, le=120, description="Age in years")
-    is_active: bool = Field(True, description="Whether user is active")
+    name: str = Field(..., description="Itinerary name")
+    start_date: datetime = Field(..., description="Start date of itinerary")
+    end_date: datetime = Field(..., description="End date of itinerary")
+    locations: List[str] = Field(default_factory=list, description="Primary cities/locations")
+    notes: Optional[str] = Field(None, description="General notes")
 
-class Product(BaseModel):
+class Reservation(BaseModel):
     """
-    Products collection schema
-    Collection name: "product" (lowercase of class name)
+    Collection: "reservation"
+    A single reservation item associated with an itinerary.
     """
-    title: str = Field(..., description="Product title")
-    description: Optional[str] = Field(None, description="Product description")
-    price: float = Field(..., ge=0, description="Price in dollars")
-    category: str = Field(..., description="Product category")
-    in_stock: bool = Field(True, description="Whether product is in stock")
+    itinerary_id: str = Field(..., description="Related itinerary id (ObjectId as string)")
+    provider: str = Field(..., description="Source provider, e.g., booking.com, agoda, viator")
+    category: Literal["lodging", "flight", "activity", "transport", "dining", "other"] = Field(
+        "other", description="Type of reservation"
+    )
+    title: str = Field(..., description="Display title, e.g., Hotel name or Activity name")
+    location: Optional[str] = Field(None, description="City or address")
+    start_time: Optional[datetime] = Field(None, description="Start/check-in/dep time")
+    end_time: Optional[datetime] = Field(None, description="End/check-out/arr time")
+    confirmation_number: Optional[str] = Field(None, description="Booking reference")
+    details: Optional[dict] = Field(default_factory=dict, description="Misc structured details")
+    source: Optional[str] = Field(None, description="email|api|manual|import")
 
-# Add your own schemas here:
-# --------------------------------------------------
-
-# Note: The Flames database viewer will automatically:
-# 1. Read these schemas from GET /schema endpoint
-# 2. Use them for document validation when creating/editing
-# 3. Handle all database operations (CRUD) directly
-# 4. You don't need to create any database endpoints!
+class Account(BaseModel):
+    """
+    Collection: "account"
+    Connected account metadata (placeholder for OAuth connections).
+    """
+    provider: Literal[
+        "email", "booking.com", "agoda", "viator", "klook", "getyourguide"
+    ]
+    label: Optional[str] = Field(None, description="Display label for the connection")
+    status: Literal["connected", "pending", "error"] = Field("pending")
+    credentials_ref: Optional[str] = Field(None, description="Reference to stored credentials (external vault)")
+    last_sync_at: Optional[datetime] = Field(None, description="Last time we synced from this account")
