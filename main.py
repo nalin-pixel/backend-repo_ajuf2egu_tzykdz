@@ -183,17 +183,71 @@ def get_supported_providers():
     return {"providers": list(SUPPORTED_PROVIDERS.keys())}
 
 
+class EmailMessageIn(BaseModel):
+    subject: Optional[str] = ""
+    sender: Optional[str] = ""
+    body_text: Optional[str] = ""
+
+
 class EmailImportIn(BaseModel):
     itinerary_id: str
     provider_hint: Optional[str] = None
-    raw_eml: Optional[str] = None
-    imap_config: Optional[dict] = None
+    gmail_access_token: Optional[str] = None  # placeholder for future use
+    messages: Optional[List[EmailMessageIn]] = None  # raw messages for demo
 
 
 @app.post("/api/import/email")
 def import_from_email(payload: EmailImportIn):
-    # Placeholder for future: parse emails to reservations
-    return {"status": "accepted", "message": "Email import queued", "itinerary_id": payload.itinerary_id}
+    # Validate itinerary
+    from bson import ObjectId
+    try:
+        _ = db["itinerary"].find_one({"_id": ObjectId(payload.itinerary_id)})
+        if _ is None:
+            raise HTTPException(status_code=404, detail="Itinerary not found")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid itinerary_id")
+
+    # Import via Gmail helper (mockable). If messages provided, use them.
+    from providers.email_import import import_gmail_to_reservations
+
+    raw_messages = None
+    if payload.messages:
+        # Map incoming fields to expected keys
+        raw_messages = [
+            {
+                "subject": m.subject or "",
+                "from": m.sender or "",
+                "body_text": m.body_text or "",
+            }
+            for m in payload.messages
+        ]
+
+    account = {"access_token": payload.gmail_access_token}
+    try:
+        fetched: List[Dict] = import_gmail_to_reservations(
+            account,
+            provider_hint=payload.provider_hint,
+            raw_messages=raw_messages,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Email import failed: {str(e)[:120]}")
+
+    created = 0
+    items = []
+    for item in fetched:
+        data = {
+            **item,
+            "itinerary_id": payload.itinerary_id,
+        }
+        try:
+            inserted_id = create_document("reservation", data)
+            data["id"] = inserted_id
+            items.append(data)
+            created += 1
+        except Exception:
+            continue
+
+    return {"status": "ok", "source": "email", "created": created, "items": items}
 
 
 class ProviderImportIn(BaseModel):
